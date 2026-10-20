@@ -114,11 +114,17 @@ def _extend_tool_timeout(tool_name: str, default: float | None) -> float | None:
     return max(default, entry.execution_timeout)
 
 
-def _requires_extended_tool_deadline(tool_name: str) -> bool:
+def _requires_extended_tool_deadline(tool_name: str, args: dict | None = None) -> bool:
+    """A call the shared batch deadline cannot honour runs alone: a registered transport budget,
+    or a declared per-call window (``ToolEntry.deadline_floor``). A parallel segment arms one
+    deadline at submit, so a call queued behind the worker cap would lose part of its window."""
     from agent.tool_executor import _resolve_concurrent_tool_timeout
+    from tools.registry import registry
 
     default = _resolve_concurrent_tool_timeout()
-    return _extend_tool_timeout(tool_name, default) != default
+    if _extend_tool_timeout(tool_name, default) != default:
+        return True
+    return args is not None and registry.get_deadline_floor(tool_name, args) is not None
 
 
 def _is_mcp_tool_parallel_safe(tool_name: str) -> bool:
@@ -199,7 +205,7 @@ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, lis
         return None
 
     name, args = _peel_bridge_call(tool_name, function_args)
-    if name in _NEVER_PARALLEL_TOOLS or _requires_extended_tool_deadline(name):
+    if name in _NEVER_PARALLEL_TOOLS or _requires_extended_tool_deadline(name, args):
         return None
     if name in _PATH_SCOPED_TOOLS:
         scoped = _extract_parallel_scope_paths(name, args, execution_cwd=execution_cwd)
