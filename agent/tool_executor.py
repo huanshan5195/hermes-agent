@@ -936,9 +936,11 @@ def _run_sequential_tool_execution_middleware(
     are ``_NEVER_PARALLEL_TOOLS`` and run inline below, before any deadline is armed, so
     they need no ``_SEQUENTIAL_DEADLINE_EXEMPT_TOOLS`` entry."""
     from agent.tool_dispatch_helpers import _extend_tool_timeout
+    from tools.registry_deadline_window import forget_declared_windows, poll_through_declared_window
 
+    floor = _declared_deadline_floor(function_name, function_args)
     timeout_s = None if function_name in _SEQUENTIAL_DEADLINE_EXEMPT_TOOLS else _deadline_with_floor(
-        _resolve_sequential_tool_timeout(), _declared_deadline_floor(function_name, function_args))
+        _resolve_sequential_tool_timeout(), floor)
     timeout_s = _extend_tool_timeout(function_name, timeout_s)
     ref = _ToolCallRef(function_name, function_args, effective_task_id, tool_call_id, middleware_trace)
     kwargs = dict(ref.middleware_kwargs(), execute=execute, scope_block=scope_block, display_index=display_index)
@@ -974,7 +976,9 @@ def _run_sequential_tool_execution_middleware(
     started = time.monotonic()
     abandoned = False
     try:
-        state, result = _poll_sequential_future(agent, future, function_name, deadline, started, authorization_gate)
+        state, result = poll_through_declared_window(
+            lambda at: _poll_sequential_future(agent, future, function_name, at, started, authorization_gate),
+            deadline, floor, worker_tid, authorization_gate.excluded_seconds)
         if state == "done":
             return result
         if state == "interrupted":
@@ -1017,6 +1021,7 @@ def _run_sequential_tool_execution_middleware(
             _interrupt_worker_tids(agent, worker_tid)
         return _abandoned_sequential_result(agent, ref, message, result_cls, **outcome)
     finally:
+        forget_declared_windows(worker_tid)
         # Never join a wedged worker (daemon pool also keeps it out of the atexit join).
         if prepared is None:
             executor.shutdown(wait=not abandoned, cancel_futures=abandoned)

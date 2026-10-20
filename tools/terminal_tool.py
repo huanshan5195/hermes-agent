@@ -39,6 +39,7 @@ def _redact_terminal_error_text(value: Any) -> str:
 
 
 from tools.registry import tool_error
+from tools.registry_deadline_window import mark_declared_window_open
 from tools.terminal_tool_lifecycle import (
     _check_disk_usage_warning, _cleanup_inactive_envs, _create_configured_env,
     _evict_environment_for_task, cleanup_all_environments, ensure_task_env,
@@ -1300,6 +1301,9 @@ def _run_foreground(
         from tools.interrupt import clear_current_thread_interrupt
         clear_current_thread_interrupt()
 
+    # The window ``_terminal_deadline_floor`` declares opens here, not at dispatch: sandbox
+    # creation and the pre-exec guards above must not eat into the command's own timeout.
+    mark_declared_window_open()
     for retry_count in range(max_retries + 1):
         try:
             command_cwd = _resolve_command_cwd(
